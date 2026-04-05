@@ -17,7 +17,7 @@ ctk.set_default_color_theme("blue")
 
 # 可执行文件路径配置（源码运行填 python main.py，打包后填 ./chaoxing.exe）
 #EXE_COMMAND = ["python", "main.py"]
-EXE_COMMAND = ["./ChaoxingTool.exe"]
+EXE_COMMAND = ["./chaoxing.exe"]
 
 # 自适应系统编码，解决 Windows CMD 乱码问题
 CMD_ENCODING = "gb18030" if sys.platform == "win32" else "utf-8"
@@ -32,7 +32,7 @@ class ChaoXingGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("超星学习通多并发刷课工具 By-钢")
+        self.title("超星学习通多并发刷课工具")
         self.geometry("1100x780")
         
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -433,7 +433,7 @@ class ChaoXingGUI(ctk.CTk):
         combo_speed.pack(side="left", padx=(0, 20))
         
         ctk.CTkLabel(frame_speed, text="⚡ 并发章节数:").pack(side="left", padx=(10, 5))
-        combo_jobs = ctk.CTkComboBox(frame_speed, values=["1", "2", "3", "4", "5", "6"], width=80)
+        combo_jobs = ctk.CTkComboBox(frame_speed, values=["1", "2", "3", "4", "5", "6", "7", "8"], width=80)
         combo_jobs.pack(side="left")
 
         ctrl_frame = ctk.CTkFrame(card_frame, fg_color="transparent")
@@ -463,7 +463,7 @@ class ChaoXingGUI(ctk.CTk):
             entry_cover.insert(0, preset_data.get("cover_rate", "0.9"))
             combo_speed.set(preset_data.get("speed", "1.0"))
             combo_jobs.set(str(preset_data.get("jobs", "4")))
-            if preset_data.get("tiku", True): switch_tiku.select()
+            if preset_data.get("tiku", False): switch_tiku.select()
             else: switch_tiku.deselect()
             if preset_data.get("submit", False): switch_submit.select()
             else: switch_submit.deselect()
@@ -471,7 +471,7 @@ class ChaoXingGUI(ctk.CTk):
             entry_cover.insert(0, "0.9")
             combo_speed.set("1.0")
             combo_jobs.set("4")
-            switch_tiku.select()
+            switch_tiku.deselect()
             switch_submit.deselect()
 
         self.acc_ui_elements[acc_id] = {

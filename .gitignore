@@ -1,0 +1,21 @@
+# 忽略本地账号和全局配置文件，防止隐私泄露
+history_configs.json
+global_config.json
+config_temp_*.ini
+cookies.txt
+chaoxing.log
+cache.json
+
+# 忽略 Python 缓存和虚拟环境
+__pycache__/
+*.pyc
+venv/
+.env
+
+# 忽略打包生成的文件夹
+build/
+dist/
+*.spec
+
+chaoxing.exe
+gui.exe
