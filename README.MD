@@ -10,7 +10,7 @@
 本项目基于开源核心项目 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing) 的命令行能力进行图形化封装，方便用户通过界面完成账号配置、任务启动、停止与状态查看。
 
 > 简易运行方式：
-> 如果你不想折腾 Python 环境，请在右侧 **Releases** 中下载打包好的 2.0 版本压缩包，解压后运行即可。
+> 如果你不想折腾 Python 环境，请在右侧 **Releases** 中下载打包好的 2.0 GUI 压缩包。注意：Release 只包含本项目的图形界面，不包含底层命令行程序。
 
 ---
 
@@ -48,7 +48,11 @@ pip install -r requirements.txt
 
 ### 4. 准备底层命令行程序
 
-本项目是 GUI 启动器，不直接内置底层刷课核心。请前往 [Samueli924/chaoxing](https://github.com/Samueli924/chaoxing) 下载或编译命令行程序。
+本项目是 GUI 启动器，不内置、不分发任何底层命令行程序。请用户自行准备来源与授权均合规的兼容命令行程序。
+
+可参考的上游下载入口：
+
+- [Samueli924/chaoxing Releases](https://github.com/Samueli924/chaoxing/releases/latest)
 
 默认情况下，程序会调用：
 
@@ -56,7 +60,7 @@ pip install -r requirements.txt
 ./chaoxing.exe
 ```
 
-因此请将 `chaoxing.exe` 放在项目根目录，也就是与 `app/`、`core/`、`views/` 同级的位置。打包成 exe 后，也建议将底层 `chaoxing.exe` 放在主程序同级目录。
+因此请将你自行准备的兼容命令行程序命名为 `chaoxing.exe`，并放在项目根目录，也就是与 `app/`、`core/`、`views/` 同级的位置。使用 Release 中的打包版时，请将该程序放在 GUI 主程序同级目录。
 
 ### 5. 启动界面
 
@@ -100,8 +104,9 @@ views/        Flet UI 页面、组件与主题
 
 1. 本项目仅供 Python 自动化、GUI 开发和本地工具封装等技术研究与学习交流。
 2. 禁止将本项目用于商业用途、代刷服务或任何违反平台规则的行为。
-3. 用户在下载、安装、配置和使用本项目时，需要自行承担相关风险，包括但不限于账号异常、平台检测等后果。
-4. 请尊重教育公平，合理使用技术工具。
+3. 本项目 Release 仅发布 GUI 本体，不包含、也不授权分发任何第三方或二次修改的命令行二进制程序。
+4. 用户在下载、安装、配置和使用本项目时，需要自行承担相关风险，包括但不限于账号异常、平台检测等后果。
+5. 请尊重教育公平，合理使用技术工具。
 
 ---
 
