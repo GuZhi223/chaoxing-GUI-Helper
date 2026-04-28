@@ -7,6 +7,7 @@ import sys
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,6 +15,7 @@ from core.event_bus import EventBus
 from core.events import LogEvent, LogLevel, ProgressEvent, TaskStateEvent, TaskStatus
 from models.account import AccountConfig
 from services.config_manager import ConfigManager
+from services.log_parser import LogParser
 from services.task_engine import TaskEngine
 
 CMD_ENCODING = "gb18030" if sys.platform == "win32" else "utf-8"
@@ -30,6 +32,9 @@ class AccountCardState:
     phone: str = ""
     config: AccountConfig | None = None
     temp_config_path: Path | None = None
+    last_run_time: str = ""
+    run_duration: str = ""
+    run_start_time: datetime | None = None
 
 
 class AccountViewModel:
@@ -45,9 +50,18 @@ class AccountViewModel:
         self.event_bus = event_bus
         self.project_root = Path(project_root or ".").resolve()
         self.cards: list[AccountCardState] = []
+        self.selected_accounts: set[str] = set()
         self.log_events: dict[str, list[LogEvent]] = defaultdict(list)
         self.progress_events: dict[str, list[ProgressEvent]] = defaultdict(list)
         self.on_change: Callable[[], None] | None = None
+        self.session_stats: dict[str, int] = {
+            "total_tasks": 0,
+            "completed_videos": 0,
+            "tiku_submitted": 0,
+            "tiku_obtained": 0,
+        }
+        self._completed_video_keys: set[str] = set()
+        self._tiku_pending_obtained: set[str] = set()
         self._load_history_cards()
         if self.event_bus is not None:
             self.event_bus.subscribe_sync(LogEvent, self._on_log)
@@ -77,6 +91,20 @@ class AccountViewModel:
         self._persist_history()
         self._notify()
 
+    def copy_account(self, account_id: str) -> AccountCardState | None:
+        source = self._find(account_id)
+        if source is None or source.config is None:
+            return None
+        new_config = AccountConfig(
+            username=source.config.username,
+            password=source.config.password,
+            school=source.config.school,
+            remark=f"{source.config.remark or '账号'}（副本）",
+            course_url=source.config.course_url,
+            options=dict(source.config.options),
+        )
+        return self.add_account(new_config)
+
     def remove_account(self, account_id: str) -> None:
         self.stop_account(account_id)
         self.cards = [card for card in self.cards if card.account_id != account_id]
@@ -103,10 +131,15 @@ class AccountViewModel:
         card.status = TaskStatus.RUNNING
         card.action_info = "正在启动底层任务..."
         card.percent = max(card.percent, 1.0)
+        now = datetime.now()
+        card.run_start_time = now
+        card.last_run_time = now.strftime("%Y-%m-%d %H:%M:%S")
+        card.run_duration = "00:00:00"
         self._notify()
         self._publish_log(account_id, f"已生成临时配置：{temp_path.name}")
         self._publish_log(account_id, f"课程范围：{'自动扫描全部未完成课程' if course_list == '0' else course_list}")
         self.task_engine.start(account_id, command)
+        self.session_stats["total_tasks"] += 1
 
     def stop_account(self, account_id: str) -> None:
         card = self._find(account_id)
@@ -114,6 +147,7 @@ class AccountViewModel:
             return
         card.status = TaskStatus.STOPPED
         card.action_info = "任务已停止"
+        card.run_duration = self._format_duration(card.run_start_time)
         self._notify()
         if self.task_engine is not None:
             self.task_engine.stop(account_id)
@@ -127,6 +161,44 @@ class AccountViewModel:
             self._cleanup_temp_config(card)
         if self.task_engine is not None:
             self.task_engine.stop_all()
+        self._notify()
+
+    def toggle_selection(self, account_id: str) -> None:
+        if account_id in self.selected_accounts:
+            self.selected_accounts.discard(account_id)
+        else:
+            self.selected_accounts.add(account_id)
+        self._notify()
+
+    def select_all(self) -> None:
+        self.selected_accounts = {card.account_id for card in self.cards}
+        self._notify()
+
+    def deselect_all(self) -> None:
+        self.selected_accounts.clear()
+        self._notify()
+
+    def batch_start(self) -> None:
+        targets = list(self.selected_accounts)
+        for account_id in targets:
+            card = self._find(account_id)
+            if card is not None and card.status != TaskStatus.RUNNING:
+                self.start_account(account_id)
+
+    def batch_stop(self) -> None:
+        targets = list(self.selected_accounts)
+        for account_id in targets:
+            card = self._find(account_id)
+            if card is not None and card.status == TaskStatus.RUNNING:
+                self.stop_account(account_id)
+
+    def batch_delete(self) -> None:
+        targets = list(self.selected_accounts)
+        for account_id in targets:
+            self.stop_account(account_id)
+            self.cards = [card for card in self.cards if card.account_id != account_id]
+        self.selected_accounts.clear()
+        self._persist_history()
         self._notify()
 
     def dispose(self) -> None:
@@ -200,9 +272,11 @@ class AccountViewModel:
         elif event.status == TaskStatus.COMPLETED:
             card.percent = 100.0
             card.action_info = "任务已完成"
+            card.run_duration = self._format_duration(card.run_start_time)
             self._cleanup_temp_config(card)
         elif event.status == TaskStatus.FAILED:
             card.action_info = f"任务失败：{event.reason or '未知错误'}"
+            card.run_duration = self._format_duration(card.run_start_time)
             self._cleanup_temp_config(card)
         self._notify()
 
@@ -210,6 +284,17 @@ class AccountViewModel:
         self.log_events[event.account_id].append(event)
         if len(self.log_events[event.account_id]) > 1200:
             self.log_events[event.account_id] = self.log_events[event.account_id][-1200:]
+        tiku_type, submitted = LogParser.detect_tiku_metrics(event.message)
+        aid = event.account_id
+        if tiku_type == "obtained":
+            self._tiku_pending_obtained.add(aid)
+        elif tiku_type == "discarded":
+            self._tiku_pending_obtained.discard(aid)
+        elif tiku_type == "submitted":
+            self.session_stats["tiku_submitted"] += submitted
+            if aid in self._tiku_pending_obtained:
+                self.session_stats["tiku_obtained"] += 1
+                self._tiku_pending_obtained.discard(aid)
 
     def _on_progress(self, event: ProgressEvent) -> None:
         card = self._find(event.account_id)
@@ -223,8 +308,18 @@ class AccountViewModel:
             self.progress_events[event.account_id] = self.progress_events[event.account_id][-300:]
         card.percent = event.percent
         card.status = event.status
+        card.run_duration = self._format_duration(card.run_start_time)
         text = self._playback_text(card, event)
         card.action_info = f"正在播放：{text}" if event.percent < 100 else f"已完成：{text}"
+
+        completed = bool(event.meta.get("completed")) or event.percent >= 100
+        if completed:
+            video = event.video_title or event.chapter or ""
+            key = " ".join(video.strip().lower().split())
+            if key and key not in self._completed_video_keys:
+                self._completed_video_keys.add(key)
+                self.session_stats["completed_videos"] += 1
+
         self._notify()
 
     def _write_temp_config(
@@ -252,28 +347,35 @@ class AccountViewModel:
         }
         if include_tiku and bool(options.get("enable_tiku", True)):
             token = global_config.tiku_token or ""
+            provider = global_config.tiku_provider
+            endpoint = global_config.tiku_endpoint or ""
+            model = global_config.tiku_model or ""
+            adapter_url = global_config.tiku_adapter_url or ""
+            coverage = str(global_config.tiku_coverage)
+            delay = str(global_config.tiku_delay)
+            proxy = global_config.proxy or ""
             parser["tiku"] = {
-                "provider": global_config.tiku_provider,
-                "submit": "true" if bool(options.get("auto_submit", True)) else "false",
-                "cover_rate": str(options.get("cover_rate", "0.9")),
-                "delay": "1.0",
+                "provider": provider,
+                "submit": "true" if global_config.tiku_submit else "false",
+                "cover_rate": coverage,
+                "delay": delay,
                 "true_list": "正确,对,√,是",
                 "false_list": "错误,错,×,否,不对,不正确",
                 "tokens": token,
-                "url": token,
-                "endpoint": "",
+                "url": adapter_url or token,
+                "endpoint": endpoint,
                 "key": token,
-                "model": "",
+                "model": model,
                 "min_interval_seconds": "3",
-                "http_proxy": "",
+                "http_proxy": proxy,
                 "likeapi_search": "false",
                 "likeapi_vision": "true",
                 "likeapi_model": "glm-4.5-air",
                 "likeapi_retry": "true",
                 "likeapi_retry_times": "3",
                 "siliconflow_key": token,
-                "siliconflow_model": "deepseek-ai/DeepSeek-R1",
-                "siliconflow_endpoint": "https://api.siliconflow.cn/v1/chat/completions",
+                "siliconflow_model": model or "deepseek-ai/DeepSeek-R1",
+                "siliconflow_endpoint": endpoint or "https://api.siliconflow.cn/v1/chat/completions",
             }
         with path.open("w", encoding="utf-8") as file:
             parser.write(file)
@@ -429,6 +531,54 @@ class AccountViewModel:
 
     def _safe_name(self, value: str) -> str:
         return re.sub(r"[^0-9A-Za-z_-]+", "_", value or uuid4().hex[:8])
+
+    def get_session_stats(self) -> dict[str, float]:
+        total_duration = 0.0
+        running_count = 0
+        completed_tasks = 0
+        failed_tasks = 0
+        for card in self.cards:
+            if card.run_start_time is not None:
+                if card.status == TaskStatus.RUNNING:
+                    running_count += 1
+                    total_duration += (datetime.now() - card.run_start_time).total_seconds()
+                elif card.status == TaskStatus.COMPLETED:
+                    completed_tasks += 1
+                    total_duration += self._parse_duration(card.run_duration)
+                elif card.status in {TaskStatus.FAILED, TaskStatus.STOPPED}:
+                    if card.status == TaskStatus.FAILED:
+                        failed_tasks += 1
+                    total_duration += self._parse_duration(card.run_duration)
+        finished = completed_tasks + failed_tasks
+        success_rate = (completed_tasks / finished * 100) if finished > 0 else 0.0
+        return {
+            **self.session_stats,
+            "running_tasks": running_count,
+            "total_duration": total_duration,
+            "success_rate": success_rate,
+        }
+
+    def _parse_duration(self, duration_str: str) -> float:
+        if not duration_str:
+            return 0.0
+        parts = duration_str.split(":")
+        if len(parts) == 3:
+            try:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+            except (ValueError, IndexError):
+                return 0.0
+        return 0.0
+
+    def _format_duration(self, start_time: datetime | None) -> str:
+        if start_time is None:
+            return ""
+        elapsed = (datetime.now() - start_time).total_seconds()
+        if elapsed < 0:
+            elapsed = 0
+        hours = int(elapsed // 3600)
+        minutes = int((elapsed % 3600) // 60)
+        seconds = int(elapsed % 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     def _find(self, account_id: str) -> AccountCardState | None:
         return next((card for card in self.cards if card.account_id == account_id), None)

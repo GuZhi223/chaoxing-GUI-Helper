@@ -28,5 +28,6 @@ config_temp_*.ini
 # Local editor/system files
 .idea/
 .vscode/
+.trae/
 .DS_Store
 Thumbs.db

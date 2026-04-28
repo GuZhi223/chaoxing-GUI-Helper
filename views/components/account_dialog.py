@@ -57,30 +57,42 @@ class AccountDialog:
         self.title = title
 
     def build(self) -> ft.AlertDialog:
+        btn_style_base = dict(
+            shape=ft.RoundedRectangleBorder(radius=12),
+            padding=ft.padding.symmetric(horizontal=22, vertical=0),
+        )
         self._dialog = ft.AlertDialog(
             modal=True,
             bgcolor=colors.SURFACE_LOW,
             title=ft.Text(self.title, size=20, weight=ft.FontWeight.W_700, color=colors.TEXT_PRIMARY),
             content=self._content(),
             actions=[
-                ft.TextButton("取消", on_click=self._close),
-                ft.Container(
+                ft.OutlinedButton(
+                    content="取消",
                     height=40,
-                    border_radius=12,
-                    bgcolor=colors.KLEIN_BLUE,
-                    padding=ft.padding.symmetric(horizontal=18),
-                    ink=True,
-                    on_click=self._save,
-                    content=ft.Row(
-                        spacing=8,
-                        controls=[
-                            ft.Icon(ft.Icons.CHECK_ROUNDED, size=18, color=colors.TEXT_PRIMARY),
-                            ft.Text("保存", weight=ft.FontWeight.W_700, color=colors.TEXT_PRIMARY),
-                        ],
+                    style=ft.ButtonStyle(
+                        **btn_style_base,
+                        color=colors.TEXT_SECONDARY,
+                        side=ft.BorderSide(1, colors.OUTLINE),
                     ),
+                    on_click=self._close,
+                ),
+                ft.ElevatedButton(
+                    content="保存",
+                    icon=ft.Icons.CHECK_ROUNDED,
+                    height=40,
+                    icon_color=colors.TEXT_PRIMARY,
+                    color=colors.TEXT_PRIMARY,
+                    bgcolor=colors.KLEIN_BLUE,
+                    style=ft.ButtonStyle(
+                        **btn_style_base,
+                        elevation=0,
+                    ),
+                    on_click=self._save,
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+            actions_padding=ft.padding.only(right=20, bottom=16, left=20),
         )
         return self._dialog
 
@@ -122,20 +134,18 @@ class AccountDialog:
         )
 
     def _fetch_button(self) -> ft.Control:
-        return ft.Container(
+        return ft.OutlinedButton(
+            content=ft.Text("获取课程", size=13, weight=ft.FontWeight.W_600, color=colors.KLEIN_BLUE_SOFT),
+            icon=ft.Icons.CLOUD_DOWNLOAD_ROUNDED,
+            icon_color=colors.KLEIN_BLUE_SOFT,
             height=48,
-            border_radius=12,
-            bgcolor=colors.SURFACE_HIGH,
-            padding=ft.padding.symmetric(horizontal=14),
-            ink=True,
-            on_click=self._fetch_courses,
-            content=ft.Row(
-                spacing=8,
-                controls=[
-                    ft.Icon(ft.Icons.CLOUD_DOWNLOAD_ROUNDED, size=18, color=colors.KLEIN_BLUE_SOFT),
-                    ft.Text("获取课程", size=13, weight=ft.FontWeight.W_600, color=colors.TEXT_PRIMARY),
-                ],
+            style=ft.ButtonStyle(
+                shape=ft.RoundedRectangleBorder(radius=12),
+                padding=ft.padding.symmetric(horizontal=14, vertical=0),
+                color=colors.KLEIN_BLUE_SOFT,
+                side=ft.BorderSide(1, colors.OUTLINE),
             ),
+            on_click=self._fetch_courses,
         )
 
     def _field(self, label: str, value: str, icon: str, password: bool = False) -> ft.TextField:
@@ -195,10 +205,34 @@ class AccountDialog:
                 content=ft.ListView(spacing=8, controls=rows),
             ),
             actions=[
-                ft.TextButton("取消", on_click=lambda _: self._close_picker()),
-                ft.TextButton("确认选择", on_click=confirm),
+                ft.OutlinedButton(
+                    content="取消",
+                    height=40,
+                    style=ft.ButtonStyle(
+                        shape=ft.RoundedRectangleBorder(radius=12),
+                        padding=ft.padding.symmetric(horizontal=22, vertical=0),
+                        color=colors.TEXT_SECONDARY,
+                        side=ft.BorderSide(1, colors.OUTLINE),
+                    ),
+                    on_click=lambda _: self._close_picker(),
+                ),
+                ft.ElevatedButton(
+                    content="确认选择",
+                    icon=ft.Icons.CHECK_CIRCLE_ROUNDED,
+                    icon_color=colors.TEXT_PRIMARY,
+                    color=colors.TEXT_PRIMARY,
+                    bgcolor=colors.KLEIN_BLUE,
+                    height=40,
+                    style=ft.ButtonStyle(
+                        shape=ft.RoundedRectangleBorder(radius=12),
+                        padding=ft.padding.symmetric(horizontal=22, vertical=0),
+                        elevation=0,
+                    ),
+                    on_click=confirm,
+                ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+            actions_padding=ft.padding.only(right=20, bottom=16, left=20),
         )
         if self._course_picker not in page.overlay:
             page.overlay.append(self._course_picker)

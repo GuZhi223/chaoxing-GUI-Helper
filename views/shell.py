@@ -12,7 +12,8 @@ from views.pages.account_page import AccountPage
 from views.pages.history_page import HistoryPage
 from views.pages.logs_page import LogsPage
 from views.pages.settings_page import SettingsPage
-from views.theme import colors
+from views.components.notification import Notification
+from views.theme import animations, colors
 
 
 class AppShell:
@@ -31,13 +32,15 @@ class AppShell:
         self._nav_items: dict[str, ft.Container] = {}
         self._page_cache: dict[str, ft.Control] = {}
         self._exit_dialog: ft.AlertDialog | None = None
+        self._exiting = False
+        self.notification = Notification(page)
         self.content_host = ft.AnimatedSwitcher(
             content=self._build_page("accounts"),
             transition=ft.AnimatedSwitcherTransition.FADE,
-            duration=260,
-            reverse_duration=180,
-            switch_in_curve=ft.AnimationCurve.EASE_OUT_CUBIC,
-            switch_out_curve=ft.AnimationCurve.EASE_IN_CUBIC,
+            duration=animations.PAGE_SWITCH_DURATION,
+            reverse_duration=animations.PAGE_SWITCH_REVERSE_DURATION,
+            switch_in_curve=animations.PAGE_SWITCH_IN_CURVE,
+            switch_out_curve=animations.PAGE_SWITCH_OUT_CURVE,
             expand=True,
         )
 
@@ -55,6 +58,9 @@ class AppShell:
                 ),
             ],
         )
+
+    def show_notification(self, message: str, type: str = "info") -> None:
+        self.notification.show(message, type)
 
     def _sidebar(self) -> ft.Control:
         return ft.Container(
@@ -107,7 +113,7 @@ class AppShell:
         item = ft.Container(
             height=46,
             border_radius=12,
-            animate=ft.Animation(180, ft.AnimationCurve.EASE_OUT),
+            animate=animations.NAV_ITEM,
             ink=True,
             on_click=lambda _: self._select(route),
             padding=ft.padding.symmetric(horizontal=14),
@@ -184,6 +190,8 @@ class AppShell:
         return self._placeholder_page(title="模块骨架", subtitle="页面正在建设中。", icon=ft.Icons.APPS_ROUNDED)
 
     def handle_exit(self) -> None:
+        if self._exiting:
+            return
         has_running_task = any(card.status == TaskStatus.RUNNING for card in self.account_vm.cards)
         if not has_running_task:
             self._exit_now()
@@ -234,13 +242,22 @@ class AppShell:
             self.page.update()
 
     def _confirm_exit(self, _: ft.ControlEvent | None = None) -> None:
+        self._exiting = True
         if self._exit_dialog is not None:
             self._exit_dialog.open = False
-            self.page.update()
-        self._exit_now()
+        self.page.window.prevent_close = False
+        self.page.update()
+        self.page.run_task(self._stop_all_and_destroy)
+
+    async def _stop_all_and_destroy(self) -> None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.account_vm.stop_all)
+        result = self.page.window.destroy()
+        if asyncio.iscoroutine(result):
+            await result
 
     def _exit_now(self) -> None:
-        self.account_vm.stop_all()
+        self._exiting = True
         self.page.window.prevent_close = False
         self.page.update()
         self.page.run_task(self._destroy_window)
@@ -253,7 +270,7 @@ class AppShell:
     def _placeholder_page(self, title: str, subtitle: str, icon: str) -> ft.Control:
         return ft.Container(
             expand=True,
-            animate_opacity=260,
+            animate_opacity=animations.PAGE_SWITCH_DURATION,
             content=ft.Column(
                 spacing=22,
                 controls=[

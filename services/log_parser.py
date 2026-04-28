@@ -10,6 +10,10 @@ STANDARD_LOG = re.compile(
     r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s+\|\s+(?P<level>[A-Z]+)\s*\|\s+.*?-\s+(?P<message>.*)$"
 )
 
+_TIKU_OBTAINED_RE = re.compile(r"从.*获取答案[：:]")
+_TIKU_DISCARDED_RE = re.compile(r"答案类型与题目类型不符.*已舍弃")
+_TIKU_SUBMITTED_RE = re.compile(r"填写答案为\s*\S+")
+
 
 class LogParser:
     TOTAL_COURSES = re.compile(r"课程列表过滤完毕,\s*当前课程任务数量:\s*(?P<count>\d+)|当前课程任务数量:\s*(?P<count2>\d+)")
@@ -218,3 +222,13 @@ class LogParser:
         if hour:
             return f"{hour:02d}:{minutes:02d}:{sec:02d}"
         return f"{minutes:02d}:{sec:02d}"
+
+    @staticmethod
+    def detect_tiku_metrics(message: str) -> tuple[str, int]:
+        if _TIKU_DISCARDED_RE.search(message):
+            return "discarded", 0
+        if _TIKU_OBTAINED_RE.search(message):
+            return "obtained", 0
+        if _TIKU_SUBMITTED_RE.search(message):
+            return "submitted", 1
+        return "", 0

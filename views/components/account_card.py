@@ -6,7 +6,7 @@ import flet as ft
 
 from core.events import TaskStatus
 from viewmodels.account_viewmodel import AccountCardState
-from views.theme import colors
+from views.theme import animations, colors
 
 
 class AccountCard(ft.Container):
@@ -17,6 +17,9 @@ class AccountCard(ft.Container):
         on_start: Callable[[str], None],
         on_stop: Callable[[str], None],
         on_delete: Callable[[str], None],
+        on_copy: Callable[[str], None],
+        on_toggle_select: Callable[[str], None] | None = None,
+        selected: bool = False,
         reveal_delay_ms: int = 0,
     ) -> None:
         super().__init__()
@@ -25,12 +28,15 @@ class AccountCard(ft.Container):
         self.on_start = on_start
         self.on_stop = on_stop
         self.on_delete = on_delete
+        self.on_copy = on_copy
+        self.on_toggle_select = on_toggle_select
+        self.selected = selected
         self._reveal_delay_ms = reveal_delay_ms
         self.opacity = 0
         self.offset = ft.Offset(0, 0.08)
-        self.animate_opacity = ft.Animation(260, ft.AnimationCurve.EASE_OUT_CUBIC)
-        self.animate_offset = ft.Animation(320, ft.AnimationCurve.EASE_OUT_CUBIC)
-        self.animate = ft.Animation(180, ft.AnimationCurve.EASE_OUT)
+        self.animate_opacity = animations.CARD_REVEAL_OPACITY
+        self.animate_offset = animations.CARD_REVEAL_OFFSET
+        self.animate = animations.GENERAL
         self.border_radius = 16
         self.bgcolor = colors.SURFACE
         self.padding = ft.padding.symmetric(horizontal=18, vertical=16)
@@ -51,17 +57,40 @@ class AccountCard(ft.Container):
         self.offset = ft.Offset(0, 0)
         self.update()
 
-    def refresh_state(self, state: AccountCardState) -> None:
+    def refresh_state(self, state: AccountCardState, selected: bool | None = None) -> None:
         self.account = state
+        if selected is not None:
+            self.selected = selected
         self.content = self._build_content()
         if self._is_mounted():
             self.update()
 
     def _build_content(self) -> ft.Control:
+        controls: list[ft.Control] = []
+        if self.on_toggle_select is not None:
+            controls.append(self._select_checkbox())
+        controls.extend([self._progress_block(), self._text_block(), self._status_pill(), self._actions()])
         return ft.Row(
             spacing=18,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            controls=[self._progress_block(), self._text_block(), self._status_pill(), self._actions()],
+            controls=controls,
+        )
+
+    def _select_checkbox(self) -> ft.Control:
+        def handle_change(e: ft.ControlEvent) -> None:
+            if self.on_toggle_select is not None:
+                self.on_toggle_select(self.account.account_id)
+
+        return ft.Container(
+            width=36,
+            height=36,
+            alignment=ft.Alignment(0, 0),
+            content=ft.Checkbox(
+                value=self.selected,
+                active_color=colors.KLEIN_BLUE,
+                check_color=colors.TEXT_PRIMARY,
+                on_change=handle_change,
+            ),
         )
 
     def _progress_block(self) -> ft.Control:
@@ -88,33 +117,54 @@ class AccountCard(ft.Container):
         )
 
     def _text_block(self) -> ft.Control:
+        controls: list[ft.Control] = [
+            ft.Text(
+                self.account.title or self.account.phone or "未命名账号",
+                size=16,
+                weight=ft.FontWeight.W_700,
+                color=colors.TEXT_PRIMARY,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            ),
+            ft.Text(
+                self.account.course_info,
+                size=13,
+                color=colors.TEXT_MUTED,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            ),
+            ft.Text(
+                self.account.action_info,
+                size=12,
+                color=colors.KLEIN_BLUE_SOFT,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            ),
+        ]
+        time_row = self._time_info_row()
+        if time_row is not None:
+            controls.append(time_row)
         return ft.Column(
             expand=True,
             spacing=4,
-            controls=[
-                ft.Text(
-                    self.account.title or self.account.phone or "未命名账号",
-                    size=16,
-                    weight=ft.FontWeight.W_700,
-                    color=colors.TEXT_PRIMARY,
-                    max_lines=1,
-                    overflow=ft.TextOverflow.ELLIPSIS,
-                ),
-                ft.Text(
-                    self.account.course_info,
-                    size=13,
-                    color=colors.TEXT_MUTED,
-                    max_lines=1,
-                    overflow=ft.TextOverflow.ELLIPSIS,
-                ),
-                ft.Text(
-                    self.account.action_info,
-                    size=12,
-                    color=colors.KLEIN_BLUE_SOFT,
-                    max_lines=1,
-                    overflow=ft.TextOverflow.ELLIPSIS,
-                ),
-            ],
+            controls=controls,
+        )
+
+    def _time_info_row(self) -> ft.Control | None:
+        last_run = self.account.last_run_time
+        duration = self.account.run_duration
+        if not last_run and not duration:
+            return None
+        parts: list[ft.Control] = []
+        if last_run:
+            parts.append(ft.Icon(ft.Icons.ACCESS_TIME_ROUNDED, size=13, color=colors.TEXT_MUTED))
+            parts.append(ft.Text(f"上次运行: {last_run}", size=11, color=colors.TEXT_MUTED))
+        if duration:
+            parts.append(ft.Text(f"  时长: {duration}", size=11, color=colors.TEXT_MUTED))
+        return ft.Row(
+            spacing=4,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            controls=parts,
         )
 
     def _status_pill(self) -> ft.Control:
@@ -140,6 +190,7 @@ class AccountCard(ft.Container):
             spacing=8,
             controls=[
                 self._icon_action(ft.Icons.TUNE_ROUNDED, "配置", lambda _: self.on_edit(self.account)),
+                self._icon_action(ft.Icons.CONTENT_COPY_ROUNDED, "复制", lambda _: self.on_copy(account_id), colors.KLEIN_BLUE_SOFT),
                 self._icon_action(ft.Icons.PLAY_ARROW_ROUNDED, "启动", lambda _: self.on_start(account_id), colors.MINT, enabled=not running, active=not running),
                 self._icon_action(ft.Icons.STOP_ROUNDED, "停止", lambda _: self.on_stop(account_id), colors.WARNING, enabled=running, active=running),
                 self._icon_action(ft.Icons.DELETE_OUTLINE_ROUNDED, "删除", lambda _: self.on_delete(account_id), colors.CORAL),
@@ -162,7 +213,7 @@ class AccountCard(ft.Container):
             bgcolor=colors.SURFACE_HIGH if active else colors.SURFACE,
             ink=enabled,
             tooltip=tooltip,
-            animate=ft.Animation(160, ft.AnimationCurve.EASE_OUT),
+            animate=animations.BUTTON_HOVER,
             opacity=1 if enabled else 0.38,
             on_click=on_click if enabled else None,
             content=ft.Icon(icon, size=19, color=icon_color or colors.KLEIN_BLUE_SOFT),
@@ -190,15 +241,15 @@ class AccountCard(ft.Container):
     def _status_style(self) -> tuple[str, str, str]:
         match self.account.status:
             case TaskStatus.RUNNING:
-                return "运行中", colors.MINT, "#1D3F32"
+                return "运行中", colors.MINT, colors.STATUS_RUNNING_BG
             case TaskStatus.COMPLETED:
-                return "已完成", colors.MINT, "#1D3F32"
+                return "已完成", colors.MINT, colors.STATUS_COMPLETED_BG
             case TaskStatus.FAILED:
-                return "失败", colors.CORAL, "#4A282A"
+                return "失败", colors.CORAL, colors.STATUS_FAILED_BG
             case TaskStatus.STOPPED:
-                return "已停止", colors.WARNING, "#4A3D24"
+                return "已停止", colors.WARNING, colors.STATUS_STOPPED_BG
             case _:
-                return "待启动", colors.KLEIN_BLUE_SOFT, "#22345F"
+                return "待启动", colors.KLEIN_BLUE_SOFT, colors.STATUS_IDLE_BG
 
     def _is_mounted(self) -> bool:
         try:

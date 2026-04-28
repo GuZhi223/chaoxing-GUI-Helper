@@ -47,7 +47,64 @@ class LogsPage(ft.Container):
 
         self.elegant_mode = ft.Switch(label="优雅模式", value=True, active_color=colors.KLEIN_BLUE_SOFT)
         self.elegant_mode.on_change = self._toggle_mode
+        self._level_filter = "ALL"
+        self._search_query = ""
+        self._MAX_DISPLAY = 300
+        self.level_filter = ft.Dropdown(
+            value="ALL",
+            width=120,
+            height=42,
+            border_radius=12,
+            border_color=colors.OUTLINE_SOFT,
+            focused_border_color=colors.KLEIN_BLUE_SOFT,
+            color=colors.TEXT_PRIMARY,
+            bgcolor=colors.SURFACE,
+            text_size=13,
+            content_padding=ft.padding.symmetric(horizontal=12, vertical=8),
+            options=[
+                ft.dropdown.Option("ALL", "全部"),
+                ft.dropdown.Option("INFO", "INFO"),
+                ft.dropdown.Option("WARNING", "WARNING"),
+                ft.dropdown.Option("ERROR", "ERROR"),
+                ft.dropdown.Option("SUCCESS", "SUCCESS"),
+            ],
+            on_select=self._on_level_filter_change,
+        )
+        self.search_field = ft.TextField(
+            hint_text="搜索日志内容…",
+            prefix_icon=ft.Icons.SEARCH_ROUNDED,
+            height=42,
+            width=240,
+            border_radius=12,
+            border_color=colors.OUTLINE_SOFT,
+            focused_border_color=colors.KLEIN_BLUE_SOFT,
+            color=colors.TEXT_PRIMARY,
+            bgcolor=colors.SURFACE,
+            text_size=13,
+            content_padding=ft.padding.only(left=12, right=12, top=8, bottom=8),
+            on_change=self._on_search_change,
+        )
+        self.clear_button = ft.Container(
+            height=42,
+            border_radius=12,
+            bgcolor=colors.SURFACE,
+            border=ft.border.all(1, colors.OUTLINE_SOFT),
+            ink=True,
+            on_click=self._on_clear_logs,
+            padding=ft.padding.symmetric(horizontal=14),
+            content=ft.Row(
+                tight=True,
+                spacing=6,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Icon(ft.Icons.DELETE_SWEEP_ROUNDED, size=18, color=colors.CORAL),
+                    ft.Text("清空", size=13, weight=ft.FontWeight.W_600, color=colors.TEXT_SECONDARY),
+                ],
+            ),
+        )
+        self.log_count_label = ft.Text("", size=12, color=colors.TEXT_MUTED)
         self.account_tabs = ft.Row(spacing=8, controls=[])
+        self.stats_row = ft.Row(spacing=12)
         self.summary_row = ft.Row(spacing=12)
         self.slot_list = ft.ListView(expand=True, spacing=10, auto_scroll=False, padding=2)
         self.log_list = ft.ListView(expand=True, spacing=8, auto_scroll=True, padding=16)
@@ -92,6 +149,7 @@ class LogsPage(ft.Container):
                         ),
                     ],
                 ),
+                self.stats_row,
                 self.summary_row,
                 ft.Container(
                     height=245,
@@ -119,7 +177,30 @@ class LogsPage(ft.Container):
                     border_radius=18,
                     bgcolor=LOG_BG,
                     border=ft.border.all(1, colors.OUTLINE_SOFT),
-                    content=self.log_list,
+                    padding=ft.padding.only(top=10, left=12, right=12, bottom=4),
+                    content=ft.Column(
+                        expand=True,
+                        spacing=0,
+                        controls=[
+                            ft.Row(
+                                spacing=10,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                controls=[
+                                    ft.Text("运行日志", size=15, weight=ft.FontWeight.W_700, color=colors.TEXT_PRIMARY),
+                                    ft.Container(expand=True),
+                                    self.level_filter,
+                                    self.search_field,
+                                    self.clear_button,
+                                    self.log_count_label,
+                                ],
+                            ),
+                            ft.Container(
+                                expand=True,
+                                padding=ft.padding.only(top=8),
+                                content=self.log_list,
+                            ),
+                        ],
+                    ),
                 ),
             ],
         )
@@ -163,14 +244,64 @@ class LogsPage(ft.Container):
             self._needs_refresh = True
         self._refresh_all()
 
+    def _on_level_filter_change(self, e: ft.ControlEvent) -> None:
+        self._level_filter = e.control.value or "ALL"
+        with self._state_lock:
+            self._needs_refresh = True
+        self._refresh_all()
+
+    def _on_search_change(self, e: ft.ControlEvent) -> None:
+        self._search_query = (e.control.value or "").strip().lower()
+        with self._state_lock:
+            self._needs_refresh = True
+        self._refresh_logs()
+        self._request_update()
+
+    def _on_clear_logs(self, _: ft.ControlEvent) -> None:
+        with self._state_lock:
+            self._logs.pop(self._selected_account_id, None)
+            self._needs_refresh = True
+        self._refresh_all()
+
     def _refresh_all(self) -> None:
         self._normalize_selected_account()
+        self._refresh_stats()
         self._refresh_summary()
         self._refresh_slots()
         self._refresh_logs()
         self._sync_account_tabs()
         if self._is_mounted():
             self._request_update()
+
+    def _refresh_stats(self) -> None:
+        stats = self.account_vm.get_session_stats()
+        running = int(stats.get("running_tasks", 0))
+        completed_videos = int(stats.get("completed_videos", 0))
+        success_rate = stats.get("success_rate", 0.0)
+        total_seconds = stats.get("total_duration", 0.0)
+        tiku_submitted = int(stats.get("tiku_submitted", 0))
+        tiku_obtained = int(stats.get("tiku_obtained", 0))
+        duration_text = self._format_stat_duration(total_seconds)
+        tiku_rate = (tiku_obtained / tiku_submitted * 100) if tiku_submitted > 0 else 0.0
+        self.stats_row.controls = [
+            self._summary_card("当前运行任务", str(running), colors.KLEIN_BLUE_SOFT),
+            self._summary_card("总运行时长", duration_text, colors.TEXT_SECONDARY),
+            self._summary_card("已完成视频", str(completed_videos), colors.MINT),
+            self._summary_card("提交题目", str(tiku_submitted), colors.KLEIN_BLUE_SOFT),
+            self._summary_card("获取答案", f"{tiku_obtained}", colors.MINT),
+            self._summary_card("答题命中率", f"{tiku_rate:.0f}%", colors.MINT if tiku_rate >= 70 else colors.WARNING if tiku_rate >= 40 else colors.CORAL),
+            self._summary_card("任务完成率", f"{success_rate:.0f}%", colors.MINT if success_rate >= 80 else colors.WARNING if success_rate >= 50 else colors.CORAL),
+        ]
+
+    def _format_stat_duration(self, seconds: float) -> str:
+        total = int(max(seconds, 0))
+        hours, remainder = divmod(total, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours > 0:
+            return f"{hours}时{minutes:02d}分{secs:02d}秒"
+        if minutes > 0:
+            return f"{minutes}分{secs:02d}秒"
+        return f"{secs}秒"
 
     def _refresh_summary(self) -> None:
         slots = self._slots_by_account.get(self._selected_account_id, [])
@@ -203,14 +334,29 @@ class LogsPage(ft.Container):
             elegant_entries = [entry for entry in entries if entry.is_elegant]
             entries = elegant_entries if elegant_entries else entries
 
+        if self._level_filter != "ALL":
+            level_val = self._level_filter.lower()
+            entries = [e for e in entries if e.level.value == level_val]
+
+        if self._search_query:
+            q = self._search_query
+            entries = [e for e in entries if q in e.message.lower()]
+
         if not entries:
             self.log_list.controls = [ft.Text("等待底层日志输出。", size=13, color=colors.TEXT_MUTED, font_family="Consolas")]
+            self.log_count_label.value = ""
             return
 
+        total = len(entries)
+        display = entries[-self._MAX_DISPLAY:]
         self.log_list.controls = [
             self._elegant_card(entry) if self.elegant_mode.value and entry.is_elegant else self._raw_line(entry)
-            for entry in entries[-220:]
+            for entry in display
         ]
+        if total > self._MAX_DISPLAY:
+            self.log_count_label.value = f"显示 {len(display)}/{total} 条"
+        else:
+            self.log_count_label.value = f"{total} 条"
 
     def _summary_card(self, label: str, value: str, accent: str, expand: bool = False) -> ft.Control:
         return ft.Container(
