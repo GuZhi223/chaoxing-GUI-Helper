@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import configparser
 import difflib
 import json
+from pathlib import Path
 
 import flet as ft
 
@@ -20,6 +22,7 @@ class HistoryPage(ft.Container):
         self.sort_desc = False
         self._import_dialog: ft.AlertDialog | None = None
         self._pending_import_data: list[dict] | None = None
+        self._file_picker: ft.FilePicker | None = None
         self.search_field = ft.TextField(
             hint_text="搜索备注、手机号、课程名或课程 ID",
             prefix_icon=ft.Icons.SEARCH_ROUNDED,
@@ -58,8 +61,8 @@ class HistoryPage(ft.Container):
                                 ft.Container(width=340, content=self.search_field),
                                 self.search_count,
                                 self.sort_button,
-                                self._toolbar_action("导出", ft.Icons.FILE_UPLOAD_ROUNDED, lambda _: self._export(), colors.MINT),
-                                self._toolbar_action("导入", ft.Icons.FILE_DOWNLOAD_ROUNDED, lambda _: self._import(), colors.KLEIN_BLUE_SOFT),
+                                self._toolbar_action("导出", ft.Icons.FILE_UPLOAD_ROUNDED, lambda _: self.page.run_task(self._export), colors.MINT),
+                                self._toolbar_action("导入", ft.Icons.FILE_DOWNLOAD_ROUNDED, lambda _: self.page.run_task(self._import), colors.KLEIN_BLUE_SOFT),
                                 self._toolbar_action("刷新", ft.Icons.REFRESH_ROUNDED, lambda _: self.refresh(), colors.KLEIN_BLUE_SOFT),
                             ],
                         ),
@@ -250,20 +253,21 @@ class HistoryPage(ft.Container):
         it = iter(blob)
         return all(c in it for c in query)
 
-    def _export(self) -> None:
+    def _get_file_picker(self) -> ft.FilePicker:
+        if self._file_picker is None:
+            self._file_picker = ft.FilePicker()
+        return self._file_picker
+
+    async def _export(self) -> None:
         if not self._is_mounted():
             return
-        picker = ft.FilePicker()
-        self.page.overlay.append(picker)
-        self.page.update()
-        path = picker.save_file(
+        picker = self._get_file_picker()
+        path = await picker.save_file(
             dialog_title="导出历史配置",
             file_name="history_configs.json",
             allowed_extensions=["json"],
             file_type=ft.FilePickerFileType.CUSTOM,
         )
-        self.page.overlay.remove(picker)
-        self.page.update()
         if not path:
             return
         configs = self.config_manager.load_history()
@@ -275,37 +279,84 @@ class HistoryPage(ft.Container):
         except OSError:
             self._show_snackbar("导出失败，无法写入文件", colors.CORAL_DARK)
 
-    def _import(self) -> None:
+    async def _import(self) -> None:
         if not self._is_mounted():
             return
-        picker = ft.FilePicker()
-        self.page.overlay.append(picker)
-        self.page.update()
-        files = picker.pick_files(
-            dialog_title="选择要导入的配置文件",
-            allowed_extensions=["json"],
+        picker = self._get_file_picker()
+        files = await picker.pick_files(
+            dialog_title="选择要导入的配置文件（支持 JSON / INI）",
+            allowed_extensions=["json", "ini"],
             file_type=ft.FilePickerFileType.CUSTOM,
+            allow_multiple=True,
         )
-        self.page.overlay.remove(picker)
-        self.page.update()
         if not files:
             return
-        file_path = files[0].path
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            self._show_snackbar("无法读取导入文件", colors.CORAL_DARK)
-            return
-        if not isinstance(data, list):
-            self._show_snackbar("导入文件格式不正确", colors.CORAL_DARK)
-            return
-        valid = [item for item in data if isinstance(item, dict)]
+        valid: list[dict] = []
+        for f in files:
+            path = Path(f.path)
+            ext = path.suffix.lower()
+            if ext == ".json":
+                valid.extend(self._parse_json_import(path))
+            elif ext == ".ini":
+                parsed = self._parse_ini_config(path)
+                if parsed:
+                    valid.append(parsed)
         if not valid:
             self._show_snackbar("导入文件中没有有效的配置数据", colors.CORAL_DARK)
             return
         self._pending_import_data = valid
         self._show_import_dialog(len(valid))
+
+    @staticmethod
+    def _parse_json_import(path: Path) -> list[dict]:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return []
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            return [data]
+        return []
+
+    @staticmethod
+    def _parse_ini_config(path: Path) -> dict | None:
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(path, encoding="utf-8")
+        except (OSError, configparser.Error):
+            return None
+        if not parser.has_section("common"):
+            return None
+        username = parser.get("common", "username", fallback="")
+        password = parser.get("common", "password", fallback="")
+        if not username:
+            return None
+        course_list = parser.get("common", "course_list", fallback="")
+        speed = parser.get("common", "speed", fallback="1.0")
+        jobs = parser.getint("common", "jobs", fallback=3)
+        options: dict = {
+            "speed": speed,
+            "workers": jobs,
+        }
+        if course_list:
+            options["course_id"] = course_list
+        if parser.has_section("tiku"):
+            options["enable_tiku"] = True
+            tiku_token = parser.get("tiku", "tokens", fallback="")
+            if tiku_token:
+                options["tiku_token"] = tiku_token
+        else:
+            options["enable_tiku"] = False
+        return {
+            "username": username,
+            "password": password,
+            "school": "",
+            "remark": "",
+            "course_url": course_list,
+            "options": options,
+        }
 
     def _show_import_dialog(self, count: int) -> None:
         if not self._is_mounted():
