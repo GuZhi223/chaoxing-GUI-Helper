@@ -108,7 +108,7 @@ class AccountViewModel:
     def remove_account(self, account_id: str) -> None:
         self.stop_account(account_id)
         self.cards = [card for card in self.cards if card.account_id != account_id]
-        self._persist_history()
+        self._persist_active()
         self._notify()
 
     def start_account(self, account_id: str) -> None:
@@ -198,7 +198,7 @@ class AccountViewModel:
             self.stop_account(account_id)
             self.cards = [card for card in self.cards if card.account_id != account_id]
         self.selected_accounts.clear()
-        self._persist_history()
+        self._persist_active()
         self._notify()
 
     def dispose(self) -> None:
@@ -335,7 +335,7 @@ class AccountViewModel:
         temp_dir.mkdir(parents=True, exist_ok=True)
         path = temp_dir / (filename or f"config_temp_{self._safe_name(account_id)}.ini")
         options = account.options or {}
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(interpolation=None)
         parser["common"] = {
             "use_cookies": "false",
             "username": account.username,
@@ -504,8 +504,10 @@ class AccountViewModel:
         if self.config_manager is None:
             self.cards.append(self._state_from_config(AccountConfig(remark="默认账号")))
             return
-        history = self.config_manager.load_history()
-        self.cards = [self._state_from_config(config) for config in history]
+        active = self.config_manager.load_active()
+        if active is None:
+            active = self.config_manager.load_history()
+        self.cards = [self._state_from_config(config) for config in active]
         if not self.cards:
             self.cards.append(self._state_from_config(AccountConfig(remark="默认账号")))
 
@@ -523,7 +525,26 @@ class AccountViewModel:
         if self.config_manager is None:
             return
         configs = [card.config for card in self.cards if card.config is not None and (card.config.username or card.config.remark)]
-        self.config_manager.save_history(configs)
+        self.config_manager.save_active(configs)
+        existing = self.config_manager.load_history()
+        existing_map: dict[str, AccountConfig] = {}
+        for c in existing:
+            if c.username:
+                existing_map[c.username] = c
+        for c in configs:
+            if c.username:
+                existing_map[c.username] = c
+        merged = list(existing_map.values())
+        for c in configs:
+            if not c.username and c not in merged:
+                merged.append(c)
+        self.config_manager.save_history(merged)
+
+    def _persist_active(self) -> None:
+        if self.config_manager is None:
+            return
+        configs = [card.config for card in self.cards if card.config is not None and (card.config.username or card.config.remark)]
+        self.config_manager.save_active(configs)
 
     def _publish_log(self, account_id: str, message: str, level: LogLevel = LogLevel.INFO) -> None:
         if self.event_bus is not None:

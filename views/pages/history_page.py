@@ -12,6 +12,8 @@ from services.config_manager import ConfigManager
 from viewmodels.account_viewmodel import AccountViewModel
 from views.theme import colors
 
+_MAX_IMPORT_BYTES = 5 * 1024 * 1024
+
 
 class HistoryPage(ft.Container):
     def __init__(self, config_manager: ConfigManager, account_vm: AccountViewModel) -> None:
@@ -21,6 +23,7 @@ class HistoryPage(ft.Container):
         self.expand = True
         self.sort_desc = False
         self._import_dialog: ft.AlertDialog | None = None
+        self._confirm_dialog: ft.AlertDialog | None = None
         self._pending_import_data: list[dict] | None = None
         self._file_picker: ft.FilePicker | None = None
         self.search_field = ft.TextField(
@@ -292,47 +295,71 @@ class HistoryPage(ft.Container):
         if not files:
             return
         valid: list[dict] = []
+        errors: list[str] = []
         for f in files:
             path = Path(f.path)
             ext = path.suffix.lower()
+            if ext not in (".json", ".ini"):
+                errors.append(f"{path.name}：不支持的文件格式")
+                continue
+            if path.stat().st_size > _MAX_IMPORT_BYTES:
+                errors.append(f"{path.name}：文件过大（超过 5MB）")
+                continue
+            if path.stat().st_size == 0:
+                errors.append(f"{path.name}：文件为空")
+                continue
             if ext == ".json":
-                valid.extend(self._parse_json_import(path))
+                parsed, err = self._parse_json_import(path)
+                if err:
+                    errors.append(f"{path.name}：{err}")
+                else:
+                    valid.extend(parsed)
             elif ext == ".ini":
-                parsed = self._parse_ini_config(path)
-                if parsed:
+                parsed, err = self._parse_ini_config(path)
+                if err:
+                    errors.append(f"{path.name}：{err}")
+                elif parsed:
                     valid.append(parsed)
+        if errors:
+            self._show_snackbar("；".join(errors[:3]) + ("..." if len(errors) > 3 else ""), colors.WARNING)
         if not valid:
-            self._show_snackbar("导入文件中没有有效的配置数据", colors.CORAL_DARK)
+            if not errors:
+                self._show_snackbar("导入文件中没有有效的配置数据", colors.CORAL_DARK)
             return
         self._pending_import_data = valid
         self._show_import_dialog(len(valid))
 
     @staticmethod
-    def _parse_json_import(path: Path) -> list[dict]:
+    def _parse_json_import(path: Path) -> tuple[list[dict], str | None]:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return []
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
+        except (OSError, json.JSONDecodeError) as exc:
+            return [], f"JSON 解析失败：{exc}"
         if isinstance(data, dict):
-            return [data]
-        return []
+            if not data.get("username") and not data.get("remark"):
+                return [], "JSON 对象缺少必要字段（username 或 remark）"
+            return [data], None
+        if isinstance(data, list):
+            items = [item for item in data if isinstance(item, dict)]
+            if not items:
+                return [], "JSON 数组中没有有效的配置对象"
+            return items, None
+        return [], f"不支持的 JSON 数据类型：{type(data).__name__}"
 
     @staticmethod
-    def _parse_ini_config(path: Path) -> dict | None:
-        parser = configparser.ConfigParser()
+    def _parse_ini_config(path: Path) -> tuple[dict | None, str | None]:
+        parser = configparser.ConfigParser(interpolation=None)
         try:
             parser.read(path, encoding="utf-8")
-        except (OSError, configparser.Error):
-            return None
+        except (OSError, configparser.Error) as exc:
+            return None, f"INI 解析失败：{exc}"
         if not parser.has_section("common"):
-            return None
+            return None, "INI 文件缺少 [common] 配置节"
         username = parser.get("common", "username", fallback="")
         password = parser.get("common", "password", fallback="")
         if not username:
-            return None
+            return None, "INI 文件中 [common] 缺少 username 字段"
         course_list = parser.get("common", "course_list", fallback="")
         speed = parser.get("common", "speed", fallback="1.0")
         jobs = parser.getint("common", "jobs", fallback=3)
@@ -356,7 +383,7 @@ class HistoryPage(ft.Container):
             "remark": "",
             "course_url": course_list,
             "options": options,
-        }
+        }, None
 
     def _show_import_dialog(self, count: int) -> None:
         if not self._is_mounted():
@@ -389,7 +416,7 @@ class HistoryPage(ft.Container):
                                                 spacing=2,
                                                 controls=[
                                                     ft.Text("合并导入", size=14, weight=ft.FontWeight.W_600, color=colors.TEXT_PRIMARY),
-                                                    ft.Text("将导入的配置追加到现有列表", size=12, color=colors.TEXT_MUTED),
+                                                    ft.Text("将导入的配置追加到现有列表（相同账号自动更新）", size=12, color=colors.TEXT_MUTED),
                                                 ],
                                             ),
                                         ],
@@ -402,7 +429,7 @@ class HistoryPage(ft.Container):
                                                 spacing=2,
                                                 controls=[
                                                     ft.Text("覆盖导入", size=14, weight=ft.FontWeight.W_600, color=colors.TEXT_PRIMARY),
-                                                    ft.Text("用导入的配置替换全部现有配置", size=12, color=colors.TEXT_MUTED),
+                                                    ft.Text("用导入的配置替换全部现有配置（不可撤销）", size=12, color=colors.TEXT_MUTED),
                                                 ],
                                             ),
                                         ],
@@ -437,7 +464,7 @@ class HistoryPage(ft.Container):
                     bgcolor=colors.WARNING,
                     padding=ft.padding.symmetric(horizontal=18),
                     ink=True,
-                    on_click=lambda _: self._do_import(merge=False),
+                    on_click=lambda _: self._confirm_overwrite_import(),
                     content=ft.Row(
                         tight=True,
                         spacing=8,
@@ -461,24 +488,100 @@ class HistoryPage(ft.Container):
             if self._is_mounted():
                 self.page.update()
 
+    def _confirm_overwrite_import(self) -> None:
+        if not self._pending_import_data or not self._is_mounted():
+            return
+        self._import_dialog.open = False
+        count = len(self._pending_import_data)
+        self._confirm_dialog = ft.AlertDialog(
+            modal=True,
+            bgcolor=colors.SURFACE_LOW,
+            title=ft.Text("确认覆盖", size=20, weight=ft.FontWeight.W_700, color=colors.CORAL),
+            content=ft.Text(
+                f"即将用 {count} 个导入配置替换所有现有历史配置，此操作不可撤销。是否继续？",
+                size=14,
+                color=colors.TEXT_SECONDARY,
+            ),
+            actions=[
+                ft.TextButton("取消", on_click=lambda _: self._close_confirm_dialog()),
+                ft.Container(
+                    height=40,
+                    border_radius=12,
+                    bgcolor=colors.CORAL,
+                    padding=ft.padding.symmetric(horizontal=18),
+                    ink=True,
+                    on_click=lambda _: self._do_import(merge=False),
+                    content=ft.Text("确认覆盖", size=13, weight=ft.FontWeight.W_600, color=colors.TEXT_PRIMARY),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        if self._confirm_dialog not in self.page.overlay:
+            self.page.overlay.append(self._confirm_dialog)
+        self._confirm_dialog.open = True
+        self.page.update()
+
+    def _close_confirm_dialog(self, _: ft.ControlEvent | None = None) -> None:
+        if self._confirm_dialog is not None:
+            self._confirm_dialog.open = False
+        self._pending_import_data = None
+        if self._is_mounted():
+            self.page.update()
+
     def _do_import(self, merge: bool) -> None:
         if not self._pending_import_data:
             self._close_import_dialog()
+            self._close_confirm_dialog()
             return
-        imported = [AccountConfig.from_dict(item) for item in self._pending_import_data]
-        if merge:
-            existing = self.config_manager.load_history()
-            existing.extend(imported)
-            self.config_manager.save_history(existing)
-            total = len(existing)
-        else:
-            self.config_manager.save_history(imported)
-            total = len(imported)
+        raw_items = self._pending_import_data
+        imported: list[AccountConfig] = []
+        skipped = 0
+        for item in raw_items:
+            try:
+                imported.append(AccountConfig.from_dict(item))
+            except (TypeError, ValueError, KeyError):
+                skipped += 1
         self._pending_import_data = None
+        if not imported:
+            self._close_import_dialog()
+            self._close_confirm_dialog()
+            self._show_snackbar(f"导入失败：所有 {len(raw_items)} 个配置数据格式均无效", colors.CORAL_DARK)
+            return
+        try:
+            if merge:
+                existing = self.config_manager.load_history()
+                existing_map: dict[str, AccountConfig] = {}
+                for c in existing:
+                    if c.username:
+                        existing_map[c.username] = c
+                    else:
+                        existing_map[id(c)] = c
+                for c in imported:
+                    if c.username:
+                        existing_map[c.username] = c
+                    else:
+                        existing_map[id(c)] = c
+                merged = list(existing_map.values())
+                self.config_manager.save_history(merged)
+                self.config_manager.save_active(merged)
+                total = len(merged)
+            else:
+                self.config_manager.save_history(imported)
+                self.config_manager.save_active(imported)
+                total = len(imported)
+        except OSError as exc:
+            self._close_import_dialog()
+            self._close_confirm_dialog()
+            self._show_snackbar(f"导入失败：写入配置文件时出错（{exc}）", colors.CORAL_DARK)
+            return
         self._close_import_dialog()
+        self._close_confirm_dialog()
         self.refresh()
         mode = "合并" if merge else "覆盖"
-        self._show_snackbar(f"已{mode}导入 {len(imported)} 个配置，当前共 {total} 个", colors.MINT_DARK)
+        msg = f"已{mode}导入 {len(imported)} 个配置，当前共 {total} 个"
+        if skipped:
+            msg += f"（跳过 {skipped} 个无效条目）"
+        self._show_snackbar(msg, colors.MINT_DARK)
 
     def _show_snackbar(self, message: str, bgcolor: str) -> None:
         if not self._is_mounted():
